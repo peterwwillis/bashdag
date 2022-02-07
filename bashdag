@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -eu
+[ "${DEBUG:-0}" = "1" ] && set -x
+
+# ## Objects
+# - `dag`: *associative array*. Mapping of dag name to dag index number.
+# - `dag_r`: *associative array*. Reverse-mapping of index number to dag name
+# - `dag_nv`: *associative array*. Keys are "name:dependency", values are '1' if mapping already set in `dag`.
+# - `_dag_deps_INDEX`: *array*. The array of dependencies for a dag INDEX. The values are more INDEXes.
+# - `_dag_r_attr_NAME_INDEX`: *array*. A dynamically-created array specific to an attribute NAME and the INDEX of a dag entry.
+# 
+# By design, the internal functions give each element of the DAG an index number
+# and refer to them by their indexes. This enables making arrays dynamically that
+# refer to specific elements of the DAG without running into naming conflicts 
+# (array names have a limited character set).
+# 
+declare -A dag dag_r dag_nv
+declare -a attrs=('started' 'done' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
+declare -i _dag_c=0 # Global INDEX counter (will this roll over on really big DAGs?)
+
+_err () { echo "$0: Error: $*" 1>&2 ; exit 1 ; }
+
+_add_dagname () {
+    local name="$1" n
+    if [ -z "${dag["$name"]+unset}" ] ; then
+        dag["$name"]=$_dag_c
+        # shellcheck disable=SC2034
+        dag_r[$_dag_c]="$name"
+        #echo "    dag $_dag_c=$name"
+        eval "declare -a _dag_deps_${_dag_c}" # declare -a _dag_deps_0
+        for n in "${attrs[@]}" ; do
+            eval "declare -a _dag_r_attr_${n}_${_dag_c}"
+        done
+        _dag_c=$((_dag_c+1))
+    fi
+}
+
+_add_dagvalue () {
+    local arr name="$1" value="$2"
+    if [ -z "${dag_nv["$name:$value"]+unset}" ] ; then
+        declare -n arr="_dag_deps_${dag["$name"]}"
+        dag_nv["$name:$value"]=1
+        #echo "      Appending to array _dag_deps_${dag["$name"]}"
+        arr+=("${dag["$value"]}")
+    fi
+}
+
+# Usage: dagdep NAME DEPENDENCY
+# Add a record NAME to the dag as depending on DEPENDENCY.
+dagdep () {
+    local name="$1" dep="$2"
+    #echo "  name '$name' dependency '$dep'"
+    _add_dagname "$name"
+    _add_dagname "$dep"
+    _add_dagvalue "$name" "$dep"
+}
+
+# Usage: dag_r_attr ATTRIBUTE INDEX [VALUE ..]
+# Retrieve and set attributes in attribute-specific arrays.
+#   Pass an attribute name and a a dag index, and optional values.
+#   If optional values are passed, sets an array to the values and returns 0.
+#   If there is no value set, returns 1.
+#   If there is a value set, prints the value and returns 0.
+dag_r_attr () {
+    local arr arrname="$1" dag_i="$2"; shift 2
+    declare -n arr="_dag_r_attr_${arrname}_${dag_i}"
+    if [ $# -lt 1 ] ; then
+        if [ -z "${arr+unset}" ] ; then
+            return 1
+        fi
+        printf "%s\n" "${arr[*]}"
+    else
+        arr=("$@")
+    fi
+    return 0
+}
+
+# Usage: dagrun NAME
+# Recursively run the dag starting at NAME.
+dagrun () {
+    local arr name="$1" dag_i i
+    if [ -z "${dag["$name"]+unset}" ] ; then
+        _err "Dag '$name' does not exist"
+    fi
+    dag_i="${dag["$name"]}"
+    declare -n arr="_dag_deps_$dag_i"
+    echo "Running dag index $dag_i: $name"
+    if dag_r_attr "done" "$dag_i" >/dev/null ; then
+        echo "  Dag $name already done"
+        return 0
+    fi
+    if ! dag_r_attr "started" "$dag_i" >/dev/null ; then
+        dag_r_attr "started" "$dag_i" 1
+    else
+        echo "  $name already started"
+    fi
+    for i in "${arr[@]}" ; do
+        if ! dag_r_attr "done" "$i" >/dev/null ; then
+            if ! dag_r_attr "started" "$i" >/dev/null ; then
+                dagrun "${dag_r["$i"]}"
+            fi
+        fi
+    done
+    if dag_r_attr "program" "$dag_i" >/dev/null ; then
+        declare -n arr="_dag_r_attr_program_${dag_i}"
+        echo "    Running program for $name: '${arr[*]}'"
+    fi
+    echo "  Finished dag run '$name'"
+}
+
+# Define a program that should be executed for a given dag.
+# Usage: dagprogram NAME CMD [..]
+dagprogram () {
+    local arr name="$1" dag_i="${dag["$1"]}" ; shift 1
+    dag_r_attr "program" "$dag_i" "$@"
+    #echo "Set $name program to '$*'"
+}
+
+# Show the dag's dependencies.
+showdag () {
+    local arr name i d depslist
+    echo "Here's my dag:"
+    for i in "${!dag_r[@]}" ; do
+        name="${dag_r[$i]}"
+        echo "  $name ($i):"
+        # shellcheck disable=SC2178
+        declare -n arr="_dag_deps_${dag["$name"]}"
+        depslist=""
+        for d in "${arr[@]}" ; do
+            depslist="$depslist ${dag_r[$d]}"
+        done
+        [ -n "${depslist:-}" ] && echo "    $depslist"
+    done
+}
+
+_load_conf () {
+    for f in "$@" ; do
+        eval "$(cat "$f")"
+    done
+}
+
+_usage () {
+    cat <<EOUSAGE
+Usage: $0 [OPTIONS] [DAG ..]
+
+Create a Directed Acyclic Graph and do stuff with it (with Bash).
+
+Config file is (currently) just a Bash script that gets eval'd into the main
+script. You can use built-in commands to create and modify the DAG, create the
+DAG programmatically using Bash scripting, and access all the internals of the
+script.
+
+Options:
+    -f FILE         Load dag configuration from FILE
+    -s              Show parsed dag
+    -r              Run all command-line arguments as dags
+    -h              This screen
+EOUSAGE
+    exit 1
+}
+
+declare -a dagconfs
+SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0}
+while getopts "f:srh" args ; do
+    case "$args" in
+        f)
+            dagconfs+=("$OPTARG") ;;
+        s)
+            SHOWDAG=1 ;;
+        r)
+            RUNDAG=1 ;;
+        h)
+            _usage ;;
+        *)
+            echo "$0: Error: unknown option '$args'" ; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
+
+
+_load_conf "${dagconfs[@]}"
+if [ $SHOWDAG -eq 1 ] ; then
+    showdag
+elif [ $RUNDAG -eq 1 ] ; then
+    [ $# -lt 1 ] && _usage
+    for i in "$@" ; do
+        dagrun "$i"
+    done
+else
+    _usage
+fi
