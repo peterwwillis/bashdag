@@ -93,6 +93,7 @@ dagrun () {
         dag_r_attr "started" "$dag_i" 1
     else
         echo "  $name already started"
+        return 0
     fi
     for i in "${arr[@]}" ; do
         if ! dag_r_attr "done" "$i" >/dev/null ; then
@@ -106,6 +107,7 @@ dagrun () {
         echo "    Running program for $name: '${arr[*]}'"
     fi
     echo "  Finished dag run '$name'"
+    dag_r_attr "done" "$dag_i" 1
 }
 
 # Define a program that should be executed for a given dag.
