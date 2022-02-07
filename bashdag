@@ -105,6 +105,8 @@ dagrun () {
     if dag_r_attr "program" "$dag_i" >/dev/null ; then
         declare -n arr="_dag_r_attr_program_${dag_i}"
         echo "    Running program for $name: '${arr[*]}'"
+        # shellcheck disable=SC2068
+        bash -c "${arr[@]}"
     fi
     echo "  Finished dag run '$name'"
     dag_r_attr "done" "$dag_i" 1
@@ -120,7 +122,7 @@ dagprogram () {
 
 # Show the dag's dependencies.
 showdag () {
-    local arr name i d depslist
+    local arr arr2 name i d depslist
     echo "Here's my dag:"
     for i in "${!dag_r[@]}" ; do
         name="${dag_r[$i]}"
@@ -131,7 +133,11 @@ showdag () {
         for d in "${arr[@]}" ; do
             depslist="$depslist ${dag_r[$d]}"
         done
-        [ -n "${depslist:-}" ] && echo "    $depslist"
+        [ -n "${depslist:-}" ] && echo "    dependencies:$depslist"
+        if dag_r_attr "program" "$i" >/dev/null ; then
+            declare -n arr2="_dag_r_attr_program_${i}"
+            echo "    program: ${arr2[*]}"
+        fi
     done
 }
 

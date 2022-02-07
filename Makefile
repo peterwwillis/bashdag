@@ -4,4 +4,5 @@ shellcheck:
 	shellcheck bashdag
 
 test:
-	env -i ./bashdag -f dag.conf -r restapi
+	./bashdag -f dag.conf -s
+	./bashdag -f dag.conf -r restapi
