@@ -1,0 +1,14 @@
+Usage: ./bashdag [OPTIONS] [DAG ..]
+
+Create a Directed Acyclic Graph and do stuff with it (with Bash).
+
+Config file is (currently) just a Bash script that gets eval'd into the main
+script. You can use built-in commands to create and modify the DAG, create the
+DAG programmatically using Bash scripting, and access all the internals of the
+script.
+
+Options:
+    -f FILE         Load dag configuration from FILE
+    -s              Show parsed dag
+    -r              Run all command-line arguments as dags
+    -h              This screen
