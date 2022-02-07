@@ -159,7 +159,7 @@ EOUSAGE
     exit 1
 }
 
-declare -a dagconfs
+declare -a dagconfs=()
 SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0}
 while getopts "f:srh" args ; do
     case "$args" in
@@ -180,6 +180,7 @@ shift $((OPTIND-1))
 
 _load_conf "${dagconfs[@]}"
 if [ $SHOWDAG -eq 1 ] ; then
+    [ "${#dagconfs[*]}" -lt 1 ] && _usage
     showdag
 elif [ $RUNDAG -eq 1 ] ; then
     [ $# -lt 1 ] && _usage
