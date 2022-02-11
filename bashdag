@@ -122,22 +122,99 @@ dagprogram () {
 
 # Show the dag's dependencies.
 showdag () {
-    local arr arr2 name i d depslist
+    local arr arr2 name i d depslist program
+    "_showdag_$outtype" "dag"
     for i in "${!dag_r[@]}" ; do
         name="${dag_r[$i]}"
-        printf "%s$newline" "#  $name ($i):"
         # shellcheck disable=SC2178
         declare -n arr="_dag_deps_${dag["$name"]}"
         depslist=""
         for d in "${arr[@]}" ; do
-            depslist="$depslist ${dag_r[$d]}"
+            depslist="${depslist:+${depslist}, }${dag_r[$d]}"
         done
-        [ -n "${depslist:-}" ] && printf "%s$newline" "#     dependencies:$depslist"
+        program=""
         if dag_r_attr "program" "$i" >/dev/null ; then
             declare -n arr2="_dag_r_attr_program_${i}"
-            printf "%s$newline" "    ${arr2[*]}"
+            program="${arr2[*]}"
         fi
+        "_showdag_$outtype" "$name" "$i" "$depslist" "$program"
     done
+    "_showdag_$outtype"
+}
+_showdag_text () {
+    [ $# -gt 1 ] || return 0
+    local name="$1" i="$2" depslist="$3" program="$4"
+    printf "%s$newline" "#  $name ($i):"
+    [ -n "${depslist:-}" ] && printf "%s$newline" "#    dependencies: $depslist"
+    [ -n "${program:-}" ] && printf "%s$newline" "     $program"
+}
+_showdag_yaml () {
+    local name indent=0 i depslist program arr2 spaces
+    if [ $# -eq 0 ] ; then
+        return 0
+    elif [ $# -eq 1 ] ; then
+        name="$1"; shift
+        printf "%${indent}s$newline" "--- # dag"
+        printf "%${indent}s$newline" "$name:"
+        return 0
+    elif [ $# -gt 1 ] ; then
+        name="$1" i="$2" depslist="$3" program="$4"; shift 4
+        indent="4"
+    fi
+    printf "%${indent}s$newline" "- $name:"
+    printf "%${indent}s$newline" "    index: $i"
+    if [ -n "${depslist:-}" ] ; then
+        printf "%${indent}s$newline" "    dependencies: [ $depslist ]"
+    fi
+    if [ -n "${program:-}" ] ; then
+        printf "%${indent}s$newline" "    program: |-"
+        declare -n arr2="_dag_r_attr_program_${i}"
+        spaces="$(printf "%${indent}s" " ")"
+        printf "%s\n" "${arr2[@]}" | sed -e "s/^/$spaces      /g"
+    fi
+}
+_showdag_json () {
+    local name i depslist program arr2 spaces
+    if [ $# -eq 1 ] ; then
+        name="$1"; shift
+        printf "%s$newline" "{"
+        printf "%s$newline" "\"$name\":"
+        printf "%s$newline" "    ["
+        return 0
+    elif [ $# -eq 0 ] ; then
+        printf "%s$newline" "    ]"
+        printf "%s$newline" "}"
+        unset _showdag_json_firstline
+        return 0
+    elif [ $# -gt 1 ] ; then
+        name="$1" i="$2" depslist="$3" program="$4"; shift 4
+        depslist="$(printf "%s\n" "$depslist" | sed -E 's/(,?\s+?)([^,]+)/\1"\2"/g')"
+    fi
+    printf "%s" "      ${_showdag_json_firstline:+,}{ \"$name\": {"
+    printf "%s" " \"index\": $i"
+    if [ -n "${depslist:-}" ] ; then
+        printf "%s" ", \"dependencies\": [ $depslist ]"
+    fi
+    if [ -n "${program:-}" ] ; then
+        declare -n arr2="_dag_r_attr_program_${i}"
+        printf "%s" ", \"program\": \"$(_json_fmt_str "${arr2[@]}")\""
+    fi
+    printf "%s$newline" " } }"
+    _showdag_json_firstline=1
+}
+_json_fmt_str () {
+    local str="$1"
+    str=${str//\\/\\\\} # \ 
+    str=${str//\//\\\/} # / 
+    str=${str//\'/\\\'} # ' (not strictly needed ?)
+    str=${str//\"/\\\"} # " 
+    str=${str//	/\\t} # \t (tab)
+    str=${str//
+/\\\n} # \n (newline)
+    str=${str//^M/\\\r} # \r (carriage return)
+    str=${str//^L/\\\f} # \f (form feed)
+    str=${str//^H/\\\b} # \b (backspace)
+    printf "%s\n" "$str"
 }
 
 _load_conf () {
@@ -161,7 +238,8 @@ Options:
     -f FILE         Load dag configuration from FILE
     -s              Show parsed dag
     -0              Separate each output record by null byte
-    -r              Run all command-line arguments as dags
+    -o TYPE         Set '-s' output as TYPE (text, yaml, json)
+    -r              Execute the programs specified for each dag item starting at DAG
     -h              This screen
 EOUSAGE
     exit 1
@@ -169,13 +247,15 @@ EOUSAGE
 
 declare -a dagconfs=()
 newline="\n"
+outtype="text"
 SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0}
-while getopts "f:sr0h" args ; do
+while getopts "f:sr0o:h" args ; do
     case "$args" in
         f)      dagconfs+=("$OPTARG") ;;
         s)      SHOWDAG=1 ;;
         r)      RUNDAG=1 ;;
         0)      newline="\0" ;;
+        o)      outtype="$OPTARG" ;;
         h)      _usage ;;
         *)      _err "unknown option '$args'" ;;
     esac

@@ -11,5 +11,6 @@ Options:
     -f FILE         Load dag configuration from FILE
     -s              Show parsed dag
     -0              Separate each output record by null byte
-    -r              Run all command-line arguments as dags
+    -o TYPE         Set '-s' output as TYPE (text, yaml, json)
+    -r              Execute the programs specified for each dag item starting at DAG
     -h              This screen
