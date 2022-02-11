@@ -10,5 +10,6 @@ script.
 Options:
     -f FILE         Load dag configuration from FILE
     -s              Show parsed dag
+    -0              Separate each output record by null byte
     -r              Run all command-line arguments as dags
     -h              This screen
