@@ -84,15 +84,15 @@ dagrun () {
     fi
     dag_i="${dag["$name"]}"
     declare -n arr="_dag_deps_$dag_i"
-    echo "Running dag index $dag_i: $name"
+    echo "Running dag index $dag_i: $name" 1>&2
     if dag_r_attr "done" "$dag_i" >/dev/null ; then
-        echo "  Dag $name already done"
+        echo "  Dag $name already done" 1>&2
         return 0
     fi
     if ! dag_r_attr "started" "$dag_i" >/dev/null ; then
         dag_r_attr "started" "$dag_i" 1
     else
-        echo "  $name already started"
+        echo "  $name already started" 1>&2
         return 0
     fi
     for i in "${arr[@]}" ; do
@@ -104,11 +104,11 @@ dagrun () {
     done
     if dag_r_attr "program" "$dag_i" >/dev/null ; then
         declare -n arr="_dag_r_attr_program_${dag_i}"
-        echo "    Running program for $name: '${arr[*]}'"
+        echo "    Running program for $name: '${arr[*]}'" 1>&2
         # shellcheck disable=SC2068
         bash -c "${arr[@]}"
     fi
-    echo "  Finished dag run '$name'"
+    echo "  Finished dag run '$name'" 1>&2
     dag_r_attr "done" "$dag_i" 1
 }
 
@@ -123,20 +123,19 @@ dagprogram () {
 # Show the dag's dependencies.
 showdag () {
     local arr arr2 name i d depslist
-    echo "Here's my dag:"
     for i in "${!dag_r[@]}" ; do
         name="${dag_r[$i]}"
-        echo "  $name ($i):"
+        printf "%s$newline" "#  $name ($i):"
         # shellcheck disable=SC2178
         declare -n arr="_dag_deps_${dag["$name"]}"
         depslist=""
         for d in "${arr[@]}" ; do
             depslist="$depslist ${dag_r[$d]}"
         done
-        [ -n "${depslist:-}" ] && echo "    dependencies:$depslist"
+        [ -n "${depslist:-}" ] && printf "%s$newline" "#     dependencies:$depslist"
         if dag_r_attr "program" "$i" >/dev/null ; then
             declare -n arr2="_dag_r_attr_program_${i}"
-            echo "    program: ${arr2[*]}"
+            printf "%s$newline" "    ${arr2[*]}"
         fi
     done
 }
@@ -161,6 +160,7 @@ script.
 Options:
     -f FILE         Load dag configuration from FILE
     -s              Show parsed dag
+    -0              Separate each output record by null byte
     -r              Run all command-line arguments as dags
     -h              This screen
 EOUSAGE
@@ -168,25 +168,23 @@ EOUSAGE
 }
 
 declare -a dagconfs=()
+newline="\n"
 SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0}
-while getopts "f:srh" args ; do
+while getopts "f:sr0h" args ; do
     case "$args" in
-        f)
-            dagconfs+=("$OPTARG") ;;
-        s)
-            SHOWDAG=1 ;;
-        r)
-            RUNDAG=1 ;;
-        h)
-            _usage ;;
-        *)
-            echo "$0: Error: unknown option '$args'" ; exit 1 ;;
+        f)      dagconfs+=("$OPTARG") ;;
+        s)      SHOWDAG=1 ;;
+        r)      RUNDAG=1 ;;
+        0)      newline="\0" ;;
+        h)      _usage ;;
+        *)      _err "unknown option '$args'" ;;
     esac
 done
 shift $((OPTIND-1))
 
 
 _load_conf "${dagconfs[@]}"
+
 if [ $SHOWDAG -eq 1 ] ; then
     [ "${#dagconfs[*]}" -lt 1 ] && _usage
     showdag
