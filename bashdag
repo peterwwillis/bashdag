@@ -178,8 +178,7 @@ _showdag_json () {
     if [ $# -eq 1 ] ; then
         name="$1"; shift
         printf "%s$newline" "{"
-        printf "%s$newline" "\"$name\":"
-        printf "%s$newline" "    ["
+        printf "%s$newline" "\"$name\": ["
         return 0
     elif [ $# -eq 0 ] ; then
         printf "%s$newline" "    ]"
