@@ -29,13 +29,13 @@ Options:
     -h              This screen
 
 Environment variables:
-    WALK_DEP_FORWARD=1          When walking the dag, visit all dependencies.
-    WALK_DEP_INVERSE=1          When walking the dag, visit all inverse dependencies.
+    WALK_DEP_FORWARD=0          Disable walking forward dependencies
+    WALK_DEP_INVERSE=0          Disable walking inverse dependencies
     VERBOSE_INDENT=3            The level of indentation in verbose mode.
-    SHOWDAG=1                   Enable '-s' mode.
-    RUNDAG=1                    Enable '-r' mode.
-    QUIET=0                     Disable/enable quiet mode.
-    DEBUG=0                     Disable/enable debug tracing mode.
+    SHOWDAG=1                   Enable '-s' option
+    RUNDAG=1                    Enable '-r' option
+    QUIET=1                     Enable '-q' option
+    DEBUG=1                     Enable debug tracing
 
 Config functions:
 
@@ -47,6 +47,11 @@ Config functions:
  
   dagrun [NODE ..]
          Recursively execute the programs in the dag starting at NODE.
+         If a root node is passed, we can walk it as normal, doing both
+         dependencies and inverse dependencies.
+         If a non-root node is passed, we need to first walk all the
+         inverse dependencies. Then we do *not* walk the forward dependencies
+         of the inverse dependencies, but only the forward dependencies of
  
   walkdag [NODE ..]
          Walk the dag from a NODE (or the roots if no NODE specified). Print
