@@ -111,11 +111,20 @@ _dag_r_attr () {
 
 # Usage: dagrun [NODE ..]
 #        Recursively execute the programs in the dag starting at NODE.
+#        If a root node is passed, we can walk it as normal, doing both
+#        dependencies and inverse dependencies.
+#        If a non-root node is passed, we need to first walk all the
+#        inverse dependencies. Then we do *not* walk the forward dependencies
+#        of the inverse dependencies, but only the forward dependencies of
+#        the node we started with.
 dagrun () {
     local indexes n i
     declare -a indexes=()
     if [ $# -gt 0 ] ; then
-        for n in "$@" ; do indexes+=("${dag["$n"]}") ; done
+        for n in "$@" ; do
+            [ -n "${dag["$n"]+unset}" ] || _err "No such node '$n'"
+            indexes+=("${dag["$n"]}")
+        done
     else
         _find_dag_root "indexes"
     fi
@@ -135,6 +144,7 @@ _find_dag_root () {
     nodes=("${!dag[@]}")
     [ $# -lt 1 ] || nodes=("$@")
     for name in "${nodes[@]}" ; do
+        [ -n "${dag["$name"]+unset}" ] || _err "No such node '$name'"
         declare -n arr="_dag_deps_${dag["$name"]}"
         if [ -z "${arr+unset}" ] || [ "${#arr[@]}" -lt 1 ] ; then
             arr2+=("${dag["$name"]}")
@@ -332,13 +342,13 @@ Options:
     -h              This screen
 
 Environment variables:
-    WALK_DEP_FORWARD=1          When walking the dag, visit all dependencies.
-    WALK_DEP_INVERSE=1          When walking the dag, visit all inverse dependencies.
+    WALK_DEP_FORWARD=0          Disable walking forward dependencies
+    WALK_DEP_INVERSE=0          Disable walking inverse dependencies
     VERBOSE_INDENT=3            The level of indentation in verbose mode.
-    SHOWDAG=1                   Enable '-s' mode.
-    RUNDAG=1                    Enable '-r' mode.
-    QUIET=0                     Disable/enable quiet mode.
-    DEBUG=0                     Disable/enable debug tracing mode.
+    SHOWDAG=1                   Enable '-s' option
+    RUNDAG=1                    Enable '-r' option
+    QUIET=1                     Enable '-q' option
+    DEBUG=1                     Enable debug tracing
 
 Config functions:
 
