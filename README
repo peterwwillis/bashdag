@@ -1,18 +1,26 @@
+bashdag v0.2
+
 Usage: ./bashdag [OPTIONS] [NODE ..]
 
-Based on a config file, create a Directed Acyclic Graph and do stuff with it.
-Primarily used to execute programs according to the DAG sequence.
+  Based on a config file, create a Directed Acyclic Graph and do stuff with it.
+  Primarily used to execute programs according to the DAG sequence.
 
-Pass a NODE to begin walking the DAG starting at NODE. If no NODE is specified,
-the root nodes will be used (nodes that are depended on but themselves have no
-dependencies).
+  Pass a NODE to begin walking the DAG starting at NODE. If no NODE is specified,
+  the root nodes will be used (nodes that are depended on but themselves have no
+  dependencies).
 
-Config file is a Bash script that gets eval'd into the main script. You can use
-functions to create and modify the DAG, create the DAG programmatically using 
-Bash scripting, and access all of bashdag's internals.
+  Config file is a Bash script that gets eval'd into the main script. You can use
+  functions to create and modify the DAG, create the DAG programmatically using 
+  Bash scripting, and access all of bashdag's internals.
 
-Any cycles are silently ignored. Any node that has been visited once will not be
-visited again.
+  If '-r' is passed, any NODE's dependencies are executed recursively until
+  finally NODE's program executed. If no NODE is specified, all programs are
+  executed starting from the root nodes.
+
+  If '-i' is passed, the DAG will be walked in the inverse direction it would
+  normally be run in (for either '-s' or '-r' options).
+
+  Any node that has been visited once will not be visited again to prevent cycles.
 
 Options:
     -f FILE         Load dag configuration from FILE
@@ -20,12 +28,22 @@ Options:
     -r              Execute the programs specified for each dag node
     -0              Separate each output record by null byte
     -o TYPE         Set '-s' output as TYPE (text, yaml, json)
+    -q              Quiet mode (silence warning messages)
     -h              This screen
+
+Environment variables:
+    WALK_DEP_FORWARD=1          When walking the dag, visit all dependencies.
+    WALK_DEP_INVERSE=1          When walking the dag, visit all inverse dependencies.
+    VERBOSE_INDENT=3            The level of indentation in verbose mode.
+    SHOWDAG=1                   Enable '-s' mode.
+    RUNDAG=1                    Enable '-r' mode.
+    QUIET=0                     Disable/enable quiet mode.
+    DEBUG=0                     Disable/enable debug tracing mode.
 
 Config functions:
 
   dagdep NODE DEPENDENCY
-         Define a node NODE in the dag as depending on DEPENDENCY.
+         Define a NODE in the dag as depending on DEPENDENCY.
  
   dagprogram NODE CMD [..]
          Define a program that should be executed for a given dag.

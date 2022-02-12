@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bashdag - A DAG in Bash
 # Copyright (C) 2022  Peter Willis
-
+VERSION="0.2"
 set -eu
 [ "${DEBUG:-0}" = "1" ] && set -x
 
@@ -33,12 +33,16 @@ set -eu
 # 
 
 declare -A dag dag_r dag_nv
-declare -a attrs=('started' 'walked' 'execdone' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
+declare -a attrs=('walked' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
 declare -i _dag_c=0 # Global INDEX counter (will this roll over on really big DAGs?)
 
 _err () { echo "$0: Error: $*" 1>&2 ; exit 1 ; }
-_errecho () { [ $QUIET -eq 1 ] || echo "$0: $*" 1>&2 ; }
-_verbose () { [ $VERBOSE -eq 0 ] || _errecho "$@" ; }
+_errecho () { [ "$QUIET" -eq 1 ] || echo "$0: $*" 1>&2 ; }
+_verbose () {
+    local text i="$1"; shift ; text="$*"
+    [ "$i" -gt "0" ] && text="$(printf "(s$i)%$((i*${VERBOSE_INDENT:-3}))s%s" ' ' "$*")"
+    [ "$VERBOSE" -eq 0 ] || _errecho "$text"
+}
 
 # Usage: _init_dag_name NODE
 #        Initialize a new dependency NODE.
@@ -97,9 +101,7 @@ _dag_r_attr () {
     local arr arrname="$1" dag_i="$2"; shift 2
     declare -n arr="_dag_r_attr_${arrname}_${dag_i}"
     if [ $# -lt 1 ] ; then
-        if [ -z "${arr+unset}" ] ; then
-            return 1
-        fi
+        [ -n "${arr+unset}" ] || return 1
         printf "%s\n" "${arr[*]}"
     else
         arr=("$@")
@@ -130,10 +132,8 @@ _find_dag_root () {
     local arr arr2 name nodes
     declare -n arr2="$1"; shift
     declare -a nodes=()
-    if    [ $# -gt 0 ]
-    then  nodes=("$@")
-    else  nodes=("${!dag[@]}")
-    fi
+    nodes=("${!dag[@]}")
+    [ $# -lt 1 ] || nodes=("$@")
     for name in "${nodes[@]}" ; do
         declare -n arr="_dag_deps_${dag["$name"]}"
         if [ -z "${arr+unset}" ] || [ "${#arr[@]}" -lt 1 ] ; then
@@ -165,32 +165,18 @@ _walkdag_recurse () {
 _walkdag_one () {
     local arr name="${dag_r["$2"]}" depslist="" program="" d c="$1" i="$2" ; shift 2
 
+
     if ! _dag_r_attr "walked" "$i" >/dev/null ; then
+        _verbose "$c" "Walking node $name ($i)"
         _dag_r_attr "walked" "$i" 1
     else
-        _verbose "Node $name already walked; skipping circular dependency"
+        _verbose "$c" "Walking node $name ($i): already walked, skipping"
         return 0
     fi
 
-    #if [ $RUNDAG -eq 1 ] ; then
-        #_verbose "Running dependencies for node $name (index $i)"
-        #if _dag_r_attr "execdone" "$i" >/dev/null ; then
-        #    _errecho "Warning: Node $name program already executed"
-        #    return 0
-        #fi
-        #if ! _dag_r_attr "started" "$i" >/dev/null ; then
-        #    _dag_r_attr "started" "$i" 1
-        #else
-        #    _errecho "Warning: Node $name already started"
-        #    return 0
-        #fi
-    #fi
-
-    # Prepare the output variables
+    # Prepare the output variables and show the dag
     declare -n arr="_dag_deps_$i"
-    for d in "${arr[@]}" ; do
-        depslist="${depslist:+${depslist}, }${dag_r[$d]}"
-    done
+    for d in "${arr[@]}" ; do  depslist="${depslist:+${depslist}, }${dag_r[$d]}" ; done
     if _dag_r_attr "program" "$i" >/dev/null ; then
         # shellcheck disable=SC2178
         declare -n arr="_dag_r_attr_program_$i"
@@ -198,28 +184,35 @@ _walkdag_one () {
     fi
     _showdag "$name" "$i" "$depslist" "$program"
 
-    # First, recursively execute anything that this node depends on
-    declare -n arr="_dag_deps_$i"
-    _verbose "Beginning walking dependencies for node $name"
-    _walkdag_recurse "$((c+1))" "${arr[@]}"
-    _verbose "Finished walking dependencies for node $name"
-
     if [ $RUNDAG -eq 1 ] ; then
         if _dag_r_attr "program" "$i" >/dev/null ; then
             declare -n arr="_dag_r_attr_program_$i"
-            _verbose "    Running program for node $name: '${arr[*]}'"
+            _verbose "$c" "Running program for node $name: '${arr[*]}'"
             # shellcheck disable=SC2068
             bash -c "${arr[@]}"
         fi
-        _verbose "Finished node run '$name'"
-        _dag_r_attr "execdone" "$i" 1
+        _verbose "$c" "Finished node run '$name'"
+    fi
+
+    # First, recursively execute anything that this node depends on
+    if [ "${WALK_DEP_FORWARD:-1}" = "1" ] ; then
+        declare -n arr="_dag_deps_$i"
+        if [ -n "${arr+unset}" ] ; then
+            _verbose "$c" "Beginning walking dependencies for node $name (${arr[*]})"
+            _walkdag_recurse "$((c+1))" "${arr[@]}"
+            _verbose "$c" "Finished walking dependencies for node $name"
+        fi
     fi
 
     # Last, recursively execute anything that depends on this node
-    declare -n arr="_dag_inv_deps_$i"
-    _verbose "Beginning walking inverse dependencies for node $name"
-    _walkdag_recurse "$((c+1))" "${arr[@]}"
-    _verbose "Finished walking inverse dependencies for node $name"
+    if [ "${WALK_DEP_INVERSE:-1}" = "1" ] ; then
+        declare -n arr="_dag_inv_deps_$i"
+        if [ -n "${arr+unset}" ] ; then
+            _verbose "$c" "Beginning walking inverse dependencies for node $name (${arr[*]})"
+            _walkdag_recurse "$((c+1))" "${arr[@]}"
+            _verbose "$c" "Finished walking inverse dependencies for node $name"
+        fi
+    fi
 }
 
 _showdag () {
@@ -308,27 +301,29 @@ _load_conf () {
 
 _usage () {
     cat <<EOUSAGE
+bashdag v$VERSION
+
 Usage: $0 [OPTIONS] [NODE ..]
 
-Based on a config file, create a Directed Acyclic Graph and do stuff with it.
-Primarily used to execute programs according to the DAG sequence.
+  Based on a config file, create a Directed Acyclic Graph and do stuff with it.
+  Primarily used to execute programs according to the DAG sequence.
 
-Pass a NODE to begin walking the DAG starting at NODE. If no NODE is specified,
-the root nodes will be used (nodes that are depended on but themselves have no
-dependencies).
+  Pass a NODE to begin walking the DAG starting at NODE. If no NODE is specified,
+  the root nodes will be used (nodes that are depended on but themselves have no
+  dependencies).
 
-Config file is a Bash script that gets eval'd into the main script. You can use
-functions to create and modify the DAG, create the DAG programmatically using 
-Bash scripting, and access all of bashdag's internals.
+  Config file is a Bash script that gets eval'd into the main script. You can use
+  functions to create and modify the DAG, create the DAG programmatically using 
+  Bash scripting, and access all of bashdag's internals.
 
-If '-r' is passed, any NODE's dependencies are executed recursively until
-finally NODE's program executed. If no NODE is specified, all programs are
-executed starting from the root nodes.
+  If '-r' is passed, any NODE's dependencies are executed recursively until
+  finally NODE's program executed. If no NODE is specified, all programs are
+  executed starting from the root nodes.
 
-If '-i' is passed, the DAG will be walked in the inverse direction it would
-normally be run in (for either '-s' or '-r' options).
+  If '-i' is passed, the DAG will be walked in the inverse direction it would
+  normally be run in (for either '-s' or '-r' options).
 
-Any node that has been visited once will not be visited again to prevent cycles.
+  Any node that has been visited once will not be visited again to prevent cycles.
 
 Options:
     -f FILE         Load dag configuration from FILE
@@ -336,9 +331,17 @@ Options:
     -r              Execute the programs specified for each dag node
     -0              Separate each output record by null byte
     -o TYPE         Set '-s' output as TYPE (text, yaml, json)
-    -i              Invert the path that would normally be walked
     -q              Quiet mode (silence warning messages)
     -h              This screen
+
+Environment variables:
+    WALK_DEP_FORWARD=1          When walking the dag, visit all dependencies.
+    WALK_DEP_INVERSE=1          When walking the dag, visit all inverse dependencies.
+    VERBOSE_INDENT=3            The level of indentation in verbose mode.
+    SHOWDAG=1                   Enable '-s' mode.
+    RUNDAG=1                    Enable '-r' mode.
+    QUIET=0                     Disable/enable quiet mode.
+    DEBUG=0                     Disable/enable debug tracing mode.
 
 Config functions:
 
@@ -348,16 +351,15 @@ EOUSAGE
 }
 
 declare -a dagconfs=()
-newline="\n" outtype="text" failurecode=1 invert_path=0
+newline="\n" outtype="text" failurecode=1
 SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0} QUIET=${QUIET:-0} VERBOSE=${VERBOSE:-0}
-while getopts "f:sr0o:iqvh" args ; do
+while getopts "f:sr0o:qvh" args ; do
     case "$args" in
         f)      dagconfs+=("$OPTARG") ;;
         s)      SHOWDAG=1 ;;
         r)      RUNDAG=1 ;;
         0)      newline="\0" ;;
         o)      outtype="$OPTARG" ;;
-        i)      invert_path=1 ;;
         q)      QUIET=1 ;;
         v)      VERBOSE=1 ;;
         h)      failurecode=0 _usage ;;
