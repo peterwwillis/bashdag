@@ -238,16 +238,16 @@ _showdag_yaml () {
     elif [ $# -gt 1 ] ; then
         name="$1" i="$2" depslist="$3" program="$4"; shift 4
     fi
-    printf "%s$newline"  "- $name:"
-    printf "%s$newline"  "    index: $i"
+    printf "%s$newline"  "  - $name:"
+    printf "%s$newline"  "      index: $i"
     if [ -n "${depslist:-}" ] ; then
         depslist="$(printf "%s\n" "$depslist" | sed -E 's/(,?\s+?)([^,]+)/\1"\2"/g')"
-        printf "%s$newline"  "    dependencies: [ $depslist ]"
+        printf "%s$newline"  "      dependencies: [ $depslist ]"
     fi
     if [ -n "${program:-}" ] ; then
-        printf "%s$newline"  "    program: |-"
+        printf "%s$newline"  "      program: |-"
         declare -n arr2="_dag_r_attr_program_${i}"
-        printf "%s\n" "${arr2[@]}" | sed -e "s/^/      /g"
+        printf "%s\n" "${arr2[@]}" | sed -e "s/^/        /g"
     fi
 }
 _showdag_json () {
