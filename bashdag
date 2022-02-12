@@ -33,14 +33,14 @@ set -eu
 # 
 
 declare -A dag dag_r dag_nv
-declare -a attrs=('walked' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
+declare -a attrs=('walked' 'exec' 'show' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
 declare -i _dag_c=0 # Global INDEX counter (will this roll over on really big DAGs?)
 
 _err () { echo "$0: Error: $*" 1>&2 ; exit 1 ; }
 _errecho () { [ "$QUIET" -eq 1 ] || echo "$0: $*" 1>&2 ; }
 _verbose () {
     local text i="$1"; shift ; text="$*"
-    [ "$i" -gt "0" ] && text="$(printf "(s$i)%$((i*${VERBOSE_INDENT:-3}))s%s" ' ' "$*")"
+    [ "$i" -gt "0" ] && text="$(printf "[$i]%$((i*${VERBOSE_INDENT:-3}))s%s" ' ' "$*")"
     [ "$VERBOSE" -eq 0 ] || _errecho "$text"
 }
 
@@ -48,31 +48,29 @@ _verbose () {
 #        Initialize a new dependency NODE.
 _init_dag_name () {
     local name="$1" n
-    if [ -z "${dag["$name"]+unset}" ] ; then
-        dag["$name"]=$_dag_c
-        # shellcheck disable=SC2034
-        dag_r[$_dag_c]="$name"
-        eval "declare -a _dag_deps_${_dag_c}"
-        eval "declare -a _dag_inv_deps_${_dag_c}"
-        for n in "${attrs[@]}" ; do
-            eval "declare -a _dag_r_attr_${n}_${_dag_c}"
-        done
-        _dag_c=$((_dag_c+1))
-    fi
+    [ -z "${dag["$name"]+unset}" ] || return 0
+    dag["$name"]=$_dag_c
+    # shellcheck disable=SC2034
+    dag_r[$_dag_c]="$name"
+    eval "declare -a _dag_deps_${_dag_c}"
+    eval "declare -a _dag_inv_deps_${_dag_c}"
+    for n in "${attrs[@]}" ; do
+        eval "declare -a _dag_r_attr_${n}_${_dag_c}"
+    done
+    _dag_c=$((_dag_c+1))
 }
 
 # Usage: _add_dag_dep NODE DEP
 #        Add a dependency DEP for NODE (NODE depends on DEP).
 _add_dag_dep () {
     local arr name="$1" dep="$2"
-    if [ -z "${dag_nv["$name§$dep"]+unset}" ] ; then
-        declare -n arr="_dag_deps_${dag["$name"]}"
-        dag_nv["$name§$dep"]=1
-        arr+=("${dag["$dep"]}")
-        # shellcheck disable=SC2178
-        declare -n arr="_dag_inv_deps_${dag["$dep"]}"
-        arr+=("${dag["$name"]}")
-    fi
+    [ -z "${dag_nv["$name§$dep"]+unset}" ] || return 0
+    declare -n arr="_dag_deps_${dag["$name"]}"
+    dag_nv["$name§$dep"]=1
+    arr+=("${dag["$dep"]}")
+    # shellcheck disable=SC2178
+    declare -n arr="_dag_inv_deps_${dag["$dep"]}"
+    arr+=("${dag["$name"]}")
 }
 
 # Usage: dagdep NODE DEPENDENCY
@@ -130,7 +128,7 @@ dagrun () {
     fi
 
     RUNDAG=1
-    _walkdag_recurse 1 "${indexes[@]}"
+    _walkdag_list 1 "${indexes[@]}"
 }
 
 # Usage: _find_dag_root ARRAYNAME [NODE ..]
@@ -152,6 +150,13 @@ _find_dag_root () {
     done
 }
 
+_node_has_deps () {
+    local arr
+    declare -n arr="_dag_deps_$1"
+    [ -z "${arr+unset}" ] && return 1
+    return 0
+}
+
 # Usage: walkdag [NODE ..]
 #        Walk the dag from a NODE (or the roots if no NODE specified). Print
 #        out the DAG in a predefined format type.
@@ -163,18 +168,35 @@ walkdag () {
         for n in "$@" ; do indexes+=("${dag["$n"]}") ; done
 
     _showdag "dag"
-    _walkdag_recurse 1 "${indexes[@]}"
+    _walkdag_list 1 "${indexes[@]}"
     _showdag
 }
-_walkdag_recurse () {
+_walkdag_list () {
     local i c="$1"; shift
     for i in "$@" ; do
         _walkdag_one "$c" "$i"
     done
 }
-_walkdag_one () {
-    local arr name="${dag_r["$2"]}" depslist="" program="" d c="$1" i="$2" ; shift 2
 
+# If root:
+#   walk deps (no inverse deps)
+# If not root:
+#   walk inverse deps
+#   walk deps
+# At node:
+#   Don't walk dependencies if not supposed to
+#     Previous calling job will have set that nothing before me should walk dependencies
+#   Walk inverse dependencies if supposed to
+# 
+# If ecr_repositories:
+#   walk the dependencies
+#   only sauce *after* deps have all resolved
+# If bootstrap:
+#   walk inverse dependencies
+#   sauce *before* each dep?
+
+_walkdag_one () {
+    local arr name="${dag_r["$2"]}" d c="$1" i="$2" ; shift 2
 
     if ! _dag_r_attr "walked" "$i" >/dev/null ; then
         _verbose "$c" "Walking node $name ($i)"
@@ -184,51 +206,59 @@ _walkdag_one () {
         return 0
     fi
 
-    # Prepare the output variables and show the dag
+    # First, recursively execute anything that this node depends on
+    if [ "${WALK_DEP_FORWARD:-1}" = "1" ] ; then
+        _walkdag_deps "$c" "$i" "deps"
+    fi
+
+    _walkdag_show "$i"
+    _walkdag_program "$c" "$i"
+
+    # Last, recursively execute anything that depends on this node
+    if [ "${WALK_DEP_INVERSE:-1}" = "1" ] ; then
+        _walkdag_deps "$c" "$i" "inv_deps"
+    fi
+}
+_walkdag_deps () {
+    local arr c="$1" i="$2" arrn="$3"
+    declare -n arr="_dag_${arrn}_$i"
+    if [ -n "${arr+unset}" ] ; then
+        _verbose "$c" "Beginning walking $arrn for node $name (${arr[*]})"
+        _walkdag_list "$((c+1))" "${arr[@]}"
+        _verbose "$c" "Finished walking $arrn for node $name"
+    fi
+}
+_walkdag_show () {
+    local depslist="" program arr i="$1"
+    [ "$SHOWDAG" -eq 1 ] || return 0
+    ! _dag_r_attr "show" "$i" >/dev/null || return 0
     declare -n arr="_dag_deps_$i"
-    for d in "${arr[@]}" ; do  depslist="${depslist:+${depslist}, }${dag_r[$d]}" ; done
+    for d in "${arr[@]}" ; do
+        depslist="${depslist:+${depslist}, }${dag_r[$d]}"
+    done
     if _dag_r_attr "program" "$i" >/dev/null ; then
         # shellcheck disable=SC2178
         declare -n arr="_dag_r_attr_program_$i"
         program="${arr[*]}"
     fi
-    _showdag "$name" "$i" "$depslist" "$program"
-
-    if [ $RUNDAG -eq 1 ] ; then
-        if _dag_r_attr "program" "$i" >/dev/null ; then
-            declare -n arr="_dag_r_attr_program_$i"
-            _verbose "$c" "Running program for node $name: '${arr[*]}'"
-            # shellcheck disable=SC2068
-            bash -c "${arr[@]}"
-        fi
-        _verbose "$c" "Finished node run '$name'"
+    _showdag "${dag_r["$i"]}" "$i" "$depslist" "$program"
+    _dag_r_attr "show" "$i" 1
+}
+_walkdag_program () {
+    local arr c="$1" i="$2" name="${dag_r["$2"]}"
+    [ $RUNDAG -eq 1 ] || return 0
+    ! _dag_r_attr "exec" "$i" >/dev/null || return 0
+    if _dag_r_attr "program" "$i" >/dev/null ; then
+        declare -n arr="_dag_r_attr_program_$i"
+        _verbose "$c" "Running program for node $name: '${arr[*]}'"
+        # shellcheck disable=SC2068
+        bash -c "${arr[@]}"
     fi
-
-    # First, recursively execute anything that this node depends on
-    if [ "${WALK_DEP_FORWARD:-1}" = "1" ] ; then
-        declare -n arr="_dag_deps_$i"
-        if [ -n "${arr+unset}" ] ; then
-            _verbose "$c" "Beginning walking dependencies for node $name (${arr[*]})"
-            _walkdag_recurse "$((c+1))" "${arr[@]}"
-            _verbose "$c" "Finished walking dependencies for node $name"
-        fi
-    fi
-
-    # Last, recursively execute anything that depends on this node
-    if [ "${WALK_DEP_INVERSE:-1}" = "1" ] ; then
-        declare -n arr="_dag_inv_deps_$i"
-        if [ -n "${arr+unset}" ] ; then
-            _verbose "$c" "Beginning walking inverse dependencies for node $name (${arr[*]})"
-            _walkdag_recurse "$((c+1))" "${arr[@]}"
-            _verbose "$c" "Finished walking inverse dependencies for node $name"
-        fi
-    fi
+    _verbose "$c" "Finished program for node $name"
+    _dag_r_attr "exec" "$i" 1
 }
 
-_showdag () {
-    [ "$SHOWDAG" -eq 1 ] || return 0
-    "_showdag_$outtype" "$@"
-}
+_showdag () { "_showdag_$outtype" "$@" ; }
 _showdag_text () {
     [ $# -gt 1 ] || return 0
     local name="$1" i="$2" depslist="$3" program="$4"
