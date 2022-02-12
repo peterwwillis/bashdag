@@ -33,7 +33,7 @@ set -eu
 # 
 
 declare -A dag dag_r dag_nv
-declare -a attrs=('walked' 'exec' 'show' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
+declare -a attrs=('walked_deps' 'walked_inv_deps' 'exec' 'show' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
 declare -i _dag_c=0 # Global INDEX counter (will this roll over on really big DAGs?)
 
 _err () { echo "$0: Error: $*" 1>&2 ; exit 1 ; }
@@ -174,7 +174,12 @@ walkdag () {
 _walkdag_list () {
     local i c="$1"; shift
     for i in "$@" ; do
-        _walkdag_one "$c" "$i"
+        # First, recursively execute anything that this node depends on
+        [ ! "${WALK_DEP_FORWARD:-1}" = "1" ] || _walkdag_deps "$c" "deps" "$i"
+        #_walkdag_show "$i"
+        #_walkdag_program "$c" "$i"
+        # Last, recursively execute anything that depends on this node
+        [ ! "${WALK_DEP_INVERSE:-1}" = "1" ] || _walkdag_deps "$c" "inv_deps" "$i"
     done
 }
 
@@ -195,37 +200,35 @@ _walkdag_list () {
 #   walk inverse dependencies
 #   sauce *before* each dep?
 
-_walkdag_one () {
-    local arr name="${dag_r["$2"]}" d c="$1" i="$2" ; shift 2
-
-    if ! _dag_r_attr "walked" "$i" >/dev/null ; then
-        _verbose "$c" "Walking node $name ($i)"
-        _dag_r_attr "walked" "$i" 1
-    else
-        _verbose "$c" "Walking node $name ($i): already walked, skipping"
-        return 0
-    fi
-
-    # First, recursively execute anything that this node depends on
-    if [ "${WALK_DEP_FORWARD:-1}" = "1" ] ; then
-        _walkdag_deps "$c" "$i" "deps"
-    fi
-
-    _walkdag_show "$i"
-    _walkdag_program "$c" "$i"
-
-    # Last, recursively execute anything that depends on this node
-    if [ "${WALK_DEP_INVERSE:-1}" = "1" ] ; then
-        _walkdag_deps "$c" "$i" "inv_deps"
-    fi
-}
+# Usage: _walkdag_deps C ARRN INDEX [..]
+#        Walk the dag evaluating a specific ARRN array for INDEX nodes.
+#        - If ARRN is 'deps', walks the dependency DAG starting at INDEX until 
+#          all dependencies have been processed, then runs _walkdag_show and
+#          _walkdag_program.
+#        - If ARRN is 'inv_deps', walks the inverse dependency DAG starting
+#          at INDEX
 _walkdag_deps () {
-    local arr c="$1" i="$2" arrn="$3"
-    declare -n arr="_dag_${arrn}_$i"
-    if [ -n "${arr+unset}" ] ; then
-        _verbose "$c" "Beginning walking $arrn for node $name (${arr[*]})"
-        _walkdag_list "$((c+1))" "${arr[@]}"
-        _verbose "$c" "Finished walking $arrn for node $name"
+    local arr i j text="" c="$1" arrn="$2"
+    for i in "$@" ; do
+        declare -n arr="_dag_${arrn}_$i"
+        if [ -n "${arr+unset}" ] ; then
+            if ! _dag_r_attr "walked_$arrn" "$i" >/dev/null ; then
+                #_verbose "$c" "Walking $arrn for node ${dag_r["$i"]} ($i)"
+                _dag_r_attr "walked_$arrn" "$i" 1
+            else
+                _verbose "$c" "Walking $arrn for node ${dag_r["$i"]} ($i): already walked, skipping"
+                continue
+            fi
+            text=""
+            for j in "${arr[@]}" ; do text="$text ${dag_r["$j"]}" ; done
+            _verbose "$c" "Beginning walking $arrn for node ${dag_r["$i"]} ($text)"
+            _walkdag_deps "$((c+1))" "$arrn" "${arr[@]}"
+            _verbose "$c" "Finished walking $arrn for node ${dag_r["$i"]}"
+        fi
+    done
+    if [ "$arrn" = "deps" ] ; then
+        _walkdag_show "$i"
+        _walkdag_program "$c" "$i"
     fi
 }
 _walkdag_show () {
