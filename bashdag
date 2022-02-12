@@ -33,11 +33,11 @@ set -eu
 # 
 
 declare -A dag dag_r dag_nv
-declare -a attrs=('started' 'done' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
+declare -a attrs=('started' 'walked' 'execdone' 'program') # The NAMEs in _dag_r_attr_NAME_INDEX
 declare -i _dag_c=0 # Global INDEX counter (will this roll over on really big DAGs?)
 
 _err () { echo "$0: Error: $*" 1>&2 ; exit 1 ; }
-_errecho () { echo "$0: Info: $*" 1>&2 ; }
+_errecho () { echo "$0: $*" 1>&2 ; }
 
 # Usage: _init_dag_name NODE
 #        Initialize a new dependency NODE.
@@ -71,7 +71,7 @@ _add_dag_dep () {
 }
 
 # Usage: dagdep NODE DEPENDENCY
-#        Define a node NODE in the dag as depending on DEPENDENCY.
+#        Define a NODE in the dag as depending on DEPENDENCY.
 dagdep () {
     local name="$1" dep="$2"
     _init_dag_name "$name"
@@ -106,47 +106,23 @@ _dag_r_attr () {
     return 0
 }
 
-# Usage: dagrun NODE
+# Usage: dagrun [NODE ..]
 #        Recursively execute the programs in the dag starting at NODE.
 dagrun () {
-    local arr name="$1" dag_i i
-    if [ -z "${dag["$name"]+unset}" ] ; then
-        _err "Dag '$name' does not exist"
-    fi
-    dag_i="${dag["$name"]}"
-    declare -n arr="_dag_deps_$dag_i"
-    _errecho "Running dag index $dag_i: $name"
-    if _dag_r_attr "done" "$dag_i" >/dev/null ; then
-        _errecho "  Dag $name already done"
-        return 0
-    fi
-    if ! _dag_r_attr "started" "$dag_i" >/dev/null ; then
-        _dag_r_attr "started" "$dag_i" 1
-    else
-        _errecho "  $name already started"
-        return 0
-    fi
-    for i in "${arr[@]}" ; do
-        if ! _dag_r_attr "done" "$i" >/dev/null ; then
-            if ! _dag_r_attr "started" "$i" >/dev/null ; then
-                dagrun "${dag_r["$i"]}"
-            fi
-        fi
-    done
-    if _dag_r_attr "program" "$dag_i" >/dev/null ; then
-        declare -n arr="_dag_r_attr_program_${dag_i}"
-        _errecho "    Running program for $name: '${arr[*]}'"
-        # shellcheck disable=SC2068
-        bash -c "${arr[@]}"
-    fi
-    _errecho "  Finished dag run '$name'"
-    _dag_r_attr "done" "$dag_i" 1
+    local indexes n i
+    declare -a indexes=()
+    _find_dag_root "indexes" "$@"
+    [ "${#indexes[@]}" -gt 0 ] || \
+        for n in "$@" ; do indexes+=("${dag["$n"]}") ; done
+
+    RUNDAG=1
+    _walkdag_recurse 1 "${indexes[@]}"
 }
 
 # Usage: _find_dag_root ARRAYNAME [NODE ..]
-#        Find a root node to walk the dag from. If any arguments are passed,
-#        they are names of nodes to use as roots. Otherwise, find any nodes 
-#        which have no dependencies. Store the results in ARRAYNAME.
+#        Find root nodes (nodes that don't have any dependencies) and add their
+#        INDEXes to ARRAYNAME. If NODE is passed, checks if NODE is a root, and
+#        if it is, adds its INDEX to ARRAYNAME.
 _find_dag_root () {
     local arr arr2 name nodes
     declare -n arr2="$1"; shift
@@ -164,56 +140,87 @@ _find_dag_root () {
 }
 
 # Usage: walkdag [NODE ..]
-#        Walk the dag from a particular index name, or from the root entries.
+#        Walk the dag from a NODE (or the roots if no NODE specified). Print
+#        out the DAG in a predefined format type.
 walkdag () {
-    local roots r _already_walked
-    declare -A _already_walked
-    declare -a roots=()
-    _find_dag_root "roots" "$@"
+    local indexes n i
+    declare -a indexes=()
+    _find_dag_root "indexes" "$@"
+    [ "${#indexes[@]}" -gt 0 ] || \
+        for n in "$@" ; do indexes+=("${dag["$n"]}") ; done
 
-    "_showdag_$outtype" "dag"
-    for r in "${roots[@]}" ; do
-        _walkdag_recurse 1 "$r"
-    done
-    "_showdag_$outtype"
+    _showdag "dag"
+    _walkdag_recurse 1 "${indexes[@]}"
+    _showdag
 }
 _walkdag_recurse () {
-    local arr name i c="$1"; shift
+    local i c="$1"; shift
     for i in "$@" ; do
-
-        # Skip if already seen this entry
-        [ -z "${_already_walked["$i"]+unset}" ] || continue
-        _already_walked["$i"]=1
-
-        # Prepare the output variables
-        name="${dag_r[$i]}"
-        declare -n arr="_dag_deps_${dag["$name"]}"
-        depslist=""
-        for d in "${arr[@]}" ; do
-            depslist="${depslist:+${depslist}, }${dag_r[$d]}"
-        done
-        program=""
-        if _dag_r_attr "program" "$i" >/dev/null ; then
-            # shellcheck disable=SC2178
-            declare -n arr2="_dag_r_attr_program_${i}"
-            program="${arr2[*]}"
-        fi
-
-        "_showdag_$outtype" "$name" "$i" "$depslist" "$program"
-
-        #printf "%${c}s%s$newline" ' ' "node: ${dag_r["$i"]}" 1>&2
-
-        declare -n arr="_dag_inv_deps_$i"
-        _walkdag_recurse "$((c+1))" "${arr[@]}"
+        _walkdag_one "$c" "$i"
     done
 }
+_walkdag_one () {
+    local arr name="${dag_r["$2"]}" depslist="" program="" d c="$1" i="$2" ; shift 2
 
+    if ! _dag_r_attr "walked" "$i" >/dev/null ; then
+        _dag_r_attr "walked" "$i" 1
+    else
+        _errecho "Warning: Node $name already walked; skipping circular dependency"
+        return 0
+    fi
+
+    if [ $RUNDAG -eq 1 ] ; then
+        _errecho "Running dependencies for node $name (index $i)"
+        if _dag_r_attr "execdone" "$i" >/dev/null ; then
+            _errecho "Warning: Node $name program already executed"
+            return 0
+        fi
+        if ! _dag_r_attr "started" "$i" >/dev/null ; then
+            _dag_r_attr "started" "$i" 1
+        else
+            _errecho "Warning: Node $name already started"
+            return 0
+        fi
+    fi
+
+    # Prepare the output variables
+    declare -n arr="_dag_deps_$i"
+    for d in "${arr[@]}" ; do
+        depslist="${depslist:+${depslist}, }${dag_r[$d]}"
+    done
+    if _dag_r_attr "program" "$i" >/dev/null ; then
+        # shellcheck disable=SC2178
+        declare -n arr="_dag_r_attr_program_$i"
+        program="${arr[*]}"
+    fi
+
+    _showdag "$name" "$i" "$depslist" "$program"
+
+    declare -n arr="_dag_inv_deps_$i"
+    _walkdag_recurse "$((c+1))" "${arr[@]}"
+
+    if [ $RUNDAG -eq 1 ] ; then
+        if _dag_r_attr "program" "$i" >/dev/null ; then
+            declare -n arr="_dag_r_attr_program_$i"
+            _errecho "    Running program for node $name: '${arr[*]}'"
+            # shellcheck disable=SC2068
+            bash -c "${arr[@]}"
+        fi
+        _errecho "  Finished node run '$name'"
+        _dag_r_attr "execdone" "$i" 1
+    fi
+}
+
+_showdag () {
+    [ "$SHOWDAG" -eq 1 ] || return 0
+    "_showdag_$outtype" "$@"
+}
 _showdag_text () {
     [ $# -gt 1 ] || return 0
     local name="$1" i="$2" depslist="$3" program="$4"
     printf "%s$newline" "# $name ($i):"
-    [ -n "${depslist:-}" ] && printf "%s$newline" "#   dependencies: $depslist"
-    [ -n "${program:-}" ] && printf "%s$newline" "#   program:" && printf "%s$newline" "       $program"
+    [ -n "${depslist:-}" ] && printf "%s$newline" "#     dependencies: $depslist"
+    [ -n "${program:-}" ] && printf "%s$newline" "#     program:" && printf "%s$newline" "$program" | sed -e 's/^/#         /g'
 }
 _showdag_yaml () {
     local name i depslist program arr2
@@ -294,7 +301,10 @@ Usage: $0 [OPTIONS] [NODE ..]
 
 Based on a config file, create a Directed Acyclic Graph and do stuff with it.
 Primarily used to execute programs according to the DAG sequence.
-Pass a NODE to begin walking the DAG starting at NODE.
+
+Pass a NODE to begin walking the DAG starting at NODE. If no NODE is specified,
+the root nodes will be used (nodes that are depended on but themselves have no
+dependencies).
 
 Config file is a Bash script that gets eval'd into the main script. You can use
 functions to create and modify the DAG, create the DAG programmatically using 
@@ -306,7 +316,7 @@ visited again.
 Options:
     -f FILE         Load dag configuration from FILE
     -s              Show parsed DAG
-    -r              Execute the programs specified for each dag node starting at DAG
+    -r              Execute the programs specified for each dag node
     -0              Separate each output record by null byte
     -o TYPE         Set '-s' output as TYPE (text, yaml, json)
     -h              This screen
@@ -319,9 +329,7 @@ EOUSAGE
 }
 
 declare -a dagconfs=()
-newline="\n"
-outtype="text"
-failurecode=1
+newline="\n" outtype="text" failurecode=1
 SHOWDAG=${SHOWDAG:-0} RUNDAG=${RUNDAG:-0}
 while getopts "f:sr0o:h" args ; do
     case "$args" in
@@ -336,17 +344,13 @@ while getopts "f:sr0o:h" args ; do
 done
 shift $((OPTIND-1))
 
-
+[ "${#dagconfs[*]}" -lt 1 ] && _usage
 _load_conf "${dagconfs[@]}"
 
 if [ $SHOWDAG -eq 1 ] ; then
-    [ "${#dagconfs[*]}" -lt 1 ] && _usage
     walkdag "$@"
 elif [ $RUNDAG -eq 1 ] ; then
-    [ $# -lt 1 ] && _usage
-    for i in "$@" ; do
-        dagrun "$i"
-    done
+    dagrun "$@"
 else
     _usage
 fi
