@@ -1,16 +1,34 @@
-Usage: ./bashdag [OPTIONS] [DAG ..]
+Usage: ./bashdag [OPTIONS] [NODE ..]
 
-Create a Directed Acyclic Graph and do stuff with it (with Bash).
+Based on a config file, create a Directed Acyclic Graph and do stuff with it.
+Primarily used to execute programs according to the DAG sequence.
+Pass a NODE to begin walking the DAG starting at NODE.
 
-Config file is (currently) just a Bash script that gets eval'd into the main
-script. You can use built-in commands to create and modify the DAG, create the
-DAG programmatically using Bash scripting, and access all the internals of the
-script.
+Config file is a Bash script that gets eval'd into the main script. You can use
+functions to create and modify the DAG, create the DAG programmatically using 
+Bash scripting, and access all of bashdag's internals.
+
+Any cycles are silently ignored. Any node that has been visited once will not be
+visited again.
 
 Options:
     -f FILE         Load dag configuration from FILE
-    -s              Show parsed dag
+    -s              Show parsed DAG
+    -r              Execute the programs specified for each dag node starting at DAG
     -0              Separate each output record by null byte
     -o TYPE         Set '-s' output as TYPE (text, yaml, json)
-    -r              Execute the programs specified for each dag item starting at DAG
     -h              This screen
+
+Config functions:
+
+  dagdep NODE DEPENDENCY
+         Define a node NODE in the dag as depending on DEPENDENCY.
+ 
+  dagprogram NODE CMD [..]
+         Define a program that should be executed for a given dag.
+ 
+  dagrun NODE
+         Recursively execute the programs in the dag starting at NODE.
+ 
+  walkdag [NODE ..]
+         Walk the dag from a particular index name, or from the root entries.

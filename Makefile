@@ -1,4 +1,4 @@
-all: shellcheck test
+all: shellcheck test readme
 
 shellcheck:
 	shellcheck bashdag
@@ -8,3 +8,6 @@ test:
 	command -v yq && ./bashdag -f dag.conf -s -o yaml | yq
 	command -v jq && ./bashdag -f dag.conf -s -o json | jq .
 	./bashdag -f dag.conf -r restapi
+
+readme:
+	./bashdag -h > README
