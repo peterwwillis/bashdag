@@ -320,9 +320,6 @@ Usage: $0 [OPTIONS] [NODE ..]
   finally NODE's program executed. If no NODE is specified, all programs are
   executed starting from the root nodes.
 
-  If '-i' is passed, the DAG will be walked in the inverse direction it would
-  normally be run in (for either '-s' or '-r' options).
-
   Any node that has been visited once will not be visited again to prevent cycles.
 
 Options:
